@@ -104,7 +104,7 @@ class OsintIdp(Stack):
             deletion_protection = True,
             removal_policy = RemovalPolicy.RETAIN,
             feature_plan = _cognito.FeaturePlan.ESSENTIALS,
-            self_sign_up_enabled = False,
+            self_sign_up_enabled = True,
             sign_in_aliases = _cognito.SignInAliases(
                 email = True
             ),
