@@ -1,685 +1,530 @@
 #!/usr/bin/env python3
+import importlib
 import os
 
 import aws_cdk as cdk
 
-from addresses.binarydefense import AddressesBinaryDefense
-from addresses.blocklistde import AddressesBlocklistDe
-from addresses.blocklistua import AddressesBlocklistUa
-from addresses.botscout import AddressesBotScout
-from addresses.bruteforceblocker import AddressesBruteForceBlocker
-from addresses.c2intelfeeds import AddressesC2IntelFeeds
-from addresses.c2tracker import AddressesC2Tracker
-from addresses.cinsscore import AddressesCinsScore
-from addresses.feedwalla import AddressesFeedwalla
-from addresses.feodotracker import AddressesFeodoTracker
-from addresses.firehol import AddressesFirehol
-from addresses.freeproxylist import AddressesFreeProxyList
-from addresses.greensnow import AddressesGreenSnow
-from addresses.inversiondnsbl import AddressesInversionDnsbl
-from addresses.ipsum import AddressesIpsum
-from addresses.jamesbrine import AddressesJamesBrine
-from addresses.myipms import AddressesMyIpms
-from addresses.nubinetwork import AddressesNubiNetwork
-from addresses.proofpoint import AddressesProofPoint
-from addresses.rutgers import AddressesRutgers
-from addresses.sansisc import AddressesSansIsc
-from addresses.sblam import AddressesSblam
-from addresses.stopforumspam import AddressesStopForumSpam
-from addresses.torexit import AddressesTorExit
-from addresses.torlist import AddressesTorList
-from addresses.ultimatehosts import AddressesUltimateHosts
-from caretaker.caretaker_asnuse1 import CaretakerAsnUse1
-from caretaker.caretaker_asnusw2 import CaretakerAsnUsw2
-from caretaker.caretaker_build import CaretakerBuild
-from caretaker.caretaker_couse1 import CaretakerCoUse1
-from caretaker.caretaker_cousw2 import CaretakerCoUsw2
-from caretaker.caretaker_deploy import CaretakerDeploy
-from caretaker.caretaker_dnsuse1 import CaretakerDnsUse1
-from caretaker.caretaker_dnsusw2 import CaretakerDnsUsw2
-from caretaker.caretaker_geolite import CaretakerGeolite
-from caretaker.caretaker_ipuse1 import CaretakerIpUse1
-from caretaker.caretaker_ipusw2 import CaretakerIpUsw2
-from caretaker.caretaker_sqlite import CaretakerSqlite
-from caretaker.caretaker_stackuse1 import CaretakerStackUse1
-from caretaker.caretaker_stackuse2 import CaretakerStackUse2
-from caretaker.caretaker_stackusw2 import CaretakerStackUsw2
-from caretaker.caretaker_stuse1 import CaretakerStUse1
-from caretaker.caretaker_stusw2 import CaretakerStUsw2
-from domains.c2intelfeeds import DomainsC2IntelFeeds
-from domains.certpl import DomainsCertPl
-from domains.disposableemails import DomainsDisposableEmails
-from domains.domainsmonitor import DomainsMonitor
-from domains.inversiondnsbl import DomainsInversionDnsbl
-from domains.oisd import DomainsOisd
-from domains.openphish import DomainsOpenPhish
-from domains.phishingarmy import DomainsPhishingArmy
-from domains.phishtank import DomainsPhishTank
-from domains.threatfox import DomainsThreatFox
-from domains.threatview import DomainsThreatView
-from domains.ultimatehosts import DomainsUltimateHosts
-from domains.urlhaus import DomainsUrlhaus
+from config import Config
+from osint.osint_compile import OsintCompile
+from osint.domains.osint_c2intelfeeds import OsintC2IntelFeeds
+from osint.domains.osint_certpl import OsintCertPl
+from osint.osint_db import OsintDb
+from osint.osint_dns import OsintDns
+from osint.domains.osint_disposableemails import OsintDisposableEmails
+from osint.osint_download import OsintDownload
+from osint.osint_idp import OsintIdp
+from osint.domains.osint_inversiondnsbl import OsintInversionDnsbl
+from osint.domains.osint_hagezi import OsintHagezi
+from osint.domains.osint_onehosts import OsintOneHosts
+from osint.domains.osint_oisd import OsintOisd
+from osint.domains.osint_openphish import OsintOpenPhish
+from osint.osint_oidc import OsintOidc
+from osint.osint_layers import OsintLayers
+from osint.domains.osint_phishingarmy import OsintPhishingArmy
+from osint.domains.osint_phishtank import OsintPhishTank
+from osint.osint_s3 import OsintS3
+from osint.domains.osint_shadowwhisperer import OsintShadowWhisperer
+from osint.osint_sqlite import OsintSqlite
+from osint.osint_tld import OsintTld
+from osint.osint_unzip import OsintUnzip
+from osint.domains.osint_stevenblack import OsintStevenBlack
+from osint.domains.osint_threatfox import OsintThreatFox
+from osint.domains.osint_threatview import OsintThreatView
+from osint.domains.osint_ultimatehosts import OsintUltimateHosts
+from osint.domains.osint_urlhaus import OsintUrlHaus
+from osint.osint_home import OsintHome
+from osint.osint_api import OsintApi
+from osint.osint_search import OsintSearch
+from osint.osint_insert import OsintInsert
+from osint.osint_create import OsintCreate
+from osint.osint_daily import OsintDaily
+
+OsintDigest = importlib.import_module('osint.osint_digest').OsintDigest
 
 app = cdk.App()
 
-AddressesBinaryDefense(
-    app, 'AddressesBinaryDefense',
+dns_stack = OsintDns(
+    app, 'OsintDns',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.DNS_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
+    ),
+    cross_region_references = True
+)
+
+layers_stack = OsintLayers(
+    app, 'OsintLayers',
+    env = cdk.Environment(
+        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
+        region = Config.IDP_REGION
+    ),
+    synthesizer = cdk.DefaultStackSynthesizer(
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesBlocklistDe(
-    app, 'AddressesBlocklistDe',
+idp_stack = OsintIdp(
+    app, 'OsintIdp',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
+    )
+)
+idp_stack.add_dependency(layers_stack)
+idp_stack.add_dependency(dns_stack)
+
+home_stack = OsintHome(
+    app, 'OsintHome',
+    env = cdk.Environment(
+        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
+        region = Config.IDP_REGION
+    ),
+    synthesizer = cdk.DefaultStackSynthesizer(
+        qualifier = Config.CDK_QUALIFIER
+    )
+)
+home_stack.add_dependency(layers_stack)
+
+api_stack = OsintApi(
+    app, 'OsintApi',
+    dns_stack = dns_stack,
+    auth_lambda = idp_stack.auth,
+    home_lambda = home_stack.home,
+    root_lambda = idp_stack.root,
+    env = cdk.Environment(
+        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
+        region = Config.IDP_REGION
+    ),
+    synthesizer = cdk.DefaultStackSynthesizer(
+        qualifier = Config.CDK_QUALIFIER
+    ),
+    cross_region_references = True
+)
+api_stack.add_dependency(idp_stack)
+api_stack.add_dependency(home_stack)
+api_stack.add_dependency(dns_stack)
+
+db_stack = OsintDb(
+    app, 'OsintDb',
+    env = cdk.Environment(
+        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
+        region = Config.IDP_REGION
+    ),
+    synthesizer = cdk.DefaultStackSynthesizer(
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesBlocklistUa(
-    app, 'AddressesBlocklistUa',
+insert_stack = OsintInsert(
+    app, 'OsintInsert',
+    watchlist_table = db_stack.watchlist,
+    state_table = db_stack.state,
+    subscription_table = db_stack.subscription,
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesBotScout(
-    app, 'AddressesBotScout',
+insert_stack.add_dependency(db_stack)
+
+tld_stack = OsintTld(
+    app, 'OsintTld',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesBruteForceBlocker(
-    app, 'AddressesBruteForceBlocker',
+tld_stack.add_dependency(layers_stack)
+tld_stack.add_dependency(db_stack)
+
+s3_stack = OsintS3(
+    app, 'OsintS3',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesC2IntelFeeds(
-    app, 'AddressesC2IntelFeeds',
+sqlite_stack = OsintSqlite(
+    app, 'OsintSqlite',
+    download_queue = s3_stack.download_queue,
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesC2Tracker(
-    app, 'AddressesC2Tracker',
+search_stack = OsintSearch(
+    app, 'OsintSearch',
+    search_queue = insert_stack.search_queue,
+    watchlist_table = db_stack.watchlist,
+    osint_table = db_stack.osint,
+    users_table = db_stack.users,
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesCinsScore(
-    app, 'AddressesCinsScore',
+search_stack.add_dependency(s3_stack)
+search_stack.add_dependency(insert_stack)
+
+unzip_stack = OsintUnzip(
+    app, 'OsintUnzip',
+    zipped_queue = s3_stack.zipped_queue,
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesFeedwalla(
-    app, 'AddressesFeedwalla',
+unzip_stack.add_dependency(s3_stack)
+
+download_stack = OsintDownload(
+    app, 'OsintDownload',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesFeodoTracker(
-    app, 'AddressesFeodoTracker',
+download_stack.add_dependency(layers_stack)
+download_stack.add_dependency(s3_stack)
+
+daily_stack = OsintDaily(
+    app, 'OsintDaily',
+    search_queue = insert_stack.search_queue,
+    users_table = db_stack.users,
+    watchlist_table = db_stack.watchlist,
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesFirehol(
-    app, 'AddressesFirehol',
+daily_stack.add_dependency(s3_stack)
+daily_stack.add_dependency(db_stack)
+daily_stack.add_dependency(insert_stack)
+
+create_stack = OsintCreate(
+    app, 'OsintCreate',
+    create_queue = s3_stack.create_queue,
+    search_queue = insert_stack.search_queue,
+    users_table = db_stack.users,
+    watchlist_table = db_stack.watchlist,
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesFreeProxyList(
-    app, 'AddressesFreeProxyList',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+create_stack.add_dependency(s3_stack)
+create_stack.add_dependency(db_stack)
+create_stack.add_dependency(insert_stack)
+
+digest_stack = OsintDigest(
+    app, 'OsintDigest',
+    dailyremove_table=db_stack.dailyremove,
+    dailyupdate_table=db_stack.dailyupdate,
+    digest_table=db_stack.digest,
+    malware_table=db_stack.malware,
+    osint_table=db_stack.osint,
+    env=cdk.Environment(
+        account=os.getenv('CDK_DEFAULT_ACCOUNT'),
+        region=Config.IDP_REGION
     ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+    synthesizer=cdk.DefaultStackSynthesizer(
+        qualifier=Config.CDK_QUALIFIER
     )
 )
 
-AddressesGreenSnow(
-    app, 'AddressesGreenSnow',
+digest_stack.add_dependency(db_stack)
+
+compile_stack = OsintCompile(
+    app, 'OsintCompile',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesInversionDnsbl(
-    app, 'AddressesInversionDnsbl',
+compile_stack.add_dependency(s3_stack)
+
+c2intelfeeds_stack = OsintC2IntelFeeds(
+    app, 'OsintC2IntelFeeds',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesIpsum(
-    app, 'AddressesIpsum',
+c2intelfeeds_stack.add_dependency(layers_stack)
+c2intelfeeds_stack.add_dependency(s3_stack)
+
+certpl_stack = OsintCertPl(
+    app, 'OsintCertPl',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesJamesBrine(
-    app, 'AddressesJamesBrine',
+certpl_stack.add_dependency(layers_stack)
+certpl_stack.add_dependency(s3_stack)
+
+disposableemails_stack = OsintDisposableEmails(
+    app, 'OsintDisposableEmails',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesMyIpms(
-    app, 'AddressesMyIpms',
+disposableemails_stack.add_dependency(layers_stack)
+disposableemails_stack.add_dependency(s3_stack)
+
+inversiondnsbl_stack = OsintInversionDnsbl(
+    app, 'OsintInversionDnsbl',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesNubiNetwork(
-    app, 'AddressesNubiNetwork',
+inversiondnsbl_stack.add_dependency(layers_stack)
+inversiondnsbl_stack.add_dependency(s3_stack)
+
+onehosts_stack = OsintOneHosts(
+    app, 'OsintOneHosts',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesProofPoint(
-    app, 'AddressesProofPoint',
+onehosts_stack.add_dependency(layers_stack)
+onehosts_stack.add_dependency(s3_stack)
+
+hagezi_stack = OsintHagezi(
+    app, 'OsintHagezi',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesRutgers(
-    app, 'AddressesRutgers',
+hagezi_stack.add_dependency(layers_stack)
+hagezi_stack.add_dependency(s3_stack)
+
+oisd_stack = OsintOisd(
+    app, 'OsintOisd',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesSansIsc(
-    app, 'AddressesSansIsc',
+oisd_stack.add_dependency(layers_stack)
+oisd_stack.add_dependency(s3_stack)
+
+openphish_stack = OsintOpenPhish(
+    app, 'OsintOpenPhish',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesSblam(
-    app, 'AddressesSblam',
+openphish_stack.add_dependency(layers_stack)
+openphish_stack.add_dependency(s3_stack)
+
+phishingarmy_stack = OsintPhishingArmy(
+    app, 'OsintPhishingArmy',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesStopForumSpam(
-    app, 'AddressesStopForumSpam',
+phishingarmy_stack.add_dependency(layers_stack)
+phishingarmy_stack.add_dependency(s3_stack)
+
+phishtank_stack = OsintPhishTank(
+    app, 'OsintPhishTank',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesTorExit(
-    app, 'AddressesTorExit',
+phishtank_stack.add_dependency(layers_stack)
+phishtank_stack.add_dependency(s3_stack)
+
+threatfox_stack = OsintThreatFox(
+    app, 'OsintThreatFox',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesTorList(
-    app, 'AddressesTorList',
+threatfox_stack.add_dependency(layers_stack)
+threatfox_stack.add_dependency(s3_stack)
+
+threatview_stack = OsintThreatView(
+    app, 'OsintThreatView',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-AddressesUltimateHosts(
-    app, 'AddressesUltimateHosts',
+threatview_stack.add_dependency(layers_stack)
+threatview_stack.add_dependency(s3_stack)
+
+ultimatehosts_stack = OsintUltimateHosts(
+    app, 'OsintUltimateHosts',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-CaretakerAsnUse1(
-    app, 'CaretakerAsnUse1',
+ultimatehosts_stack.add_dependency(layers_stack)
+ultimatehosts_stack.add_dependency(s3_stack)
+
+urlhaus_stack = OsintUrlHaus(
+    app, 'OsintUrlHaus',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-1'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-CaretakerAsnUsw2(
-    app, 'CaretakerAsnUsw2',
+urlhaus_stack.add_dependency(layers_stack)
+urlhaus_stack.add_dependency(s3_stack)
+
+shadowwhisperer_stack = OsintShadowWhisperer(
+    app, 'OsintShadowWhisperer',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-west-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-CaretakerBuild(
-    app, 'CaretakerBuild',
+shadowwhisperer_stack.add_dependency(layers_stack)
+shadowwhisperer_stack.add_dependency(s3_stack)
+
+stevenblack_stack = OsintStevenBlack(
+    app, 'OsintStevenBlack',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
+        region = Config.IDP_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-CaretakerCoUse1(
-    app, 'CaretakerCoUse1',
+stevenblack_stack.add_dependency(layers_stack)
+stevenblack_stack.add_dependency(s3_stack)
+
+OsintOidc(
+    app, 'OsintOidc',
     env = cdk.Environment(
         account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-1'
+        region = Config.OIDC_REGION
     ),
     synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
+        qualifier = Config.CDK_QUALIFIER
     )
 )
 
-CaretakerCoUsw2(
-    app, 'CaretakerCoUsw2',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-west-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerDeploy(
-    app, 'CaretakerDeploy',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerDnsUse1(
-    app, 'CaretakerDnsUse1',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-1'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerDnsUsw2(
-    app, 'CaretakerDnsUsw2',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-west-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerGeolite(
-    app, 'CaretakerGeolite',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerIpUse1(
-    app, 'CaretakerIpUse1',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-1'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerIpUsw2(
-    app, 'CaretakerIpUsw2',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-west-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerSqlite(
-    app, 'CaretakerSqlite',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerStackUse1(
-    app, 'CaretakerStackUse1',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-1'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerStackUse2(
-    app, 'CaretakerStackUse2',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerStackUsw2(
-    app, 'CaretakerStackUsw2',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-west-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerStUse1(
-    app, 'CaretakerStUse1',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-1'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-CaretakerStUsw2(
-    app, 'CaretakerStUsw2',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-west-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsC2IntelFeeds(
-    app, 'DomainsC2IntelFeeds',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsCertPl(
-    app, 'DomainsCertPl',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsDisposableEmails(
-    app, 'DomainsDisposableEmails',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsMonitor(
-    app, 'DomainsMonitor',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsInversionDnsbl(
-    app, 'DomainsInversionDnsbl',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsOisd(
-    app, 'DomainsOisd',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsOpenPhish(
-    app, 'DomainsOpenPhish',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsPhishingArmy(
-    app, 'DomainsPhishingArmy',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsPhishTank(
-    app, 'DomainsPhishTank',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsThreatFox(
-    app, 'DomainsThreatFox',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsThreatView(
-    app, 'DomainsThreatView',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsUltimateHosts(
-    app, 'DomainsUltimateHosts',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-DomainsUrlhaus(
-    app, 'DomainsUrlhaus',
-    env = cdk.Environment(
-        account = os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region = 'us-east-2'
-    ),
-    synthesizer = cdk.DefaultStackSynthesizer(
-        qualifier = 'lukach'
-    )
-)
-
-cdk.Tags.of(app).add('Alias','caretaker')
-cdk.Tags.of(app).add('GitHub','https://github.com/jblukach/caretaker')
-cdk.Tags.of(app).add('Org','lukach.io')
+cdk.Tags.of(app).add('Alias', Config.ALIAS)
+cdk.Tags.of(app).add('GitHub', Config.GITHUB_URL)
+cdk.Tags.of(app).add('Org', Config.ORGANIZATION)
 
 app.synth()
