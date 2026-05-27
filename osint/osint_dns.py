@@ -59,6 +59,32 @@ class OsintDns(Stack):
         # Export hosted zone for use by API and IDP stacks
         self.hostzone = hostzone
 
+    ### NS RECORDS ###
+
+        osintdev = _route53.NsRecord(
+            self, 'osintdev',
+            zone = hostzone,
+            record_name = 'dev.osint.4n6ir.com',
+            values=[
+                'ns-864.awsdns-44.net',
+                'ns-1769.awsdns-29.co.uk',
+                'ns-508.awsdns-63.com',
+                'ns-1460.awsdns-54.org'
+            ]
+        )
+
+        osintbeta = _route53.NsRecord(
+            self, 'osintbeta',
+            zone = hostzone,
+            record_name = 'beta.osint.4n6ir.com',
+            values=[
+                'ns-799.awsdns-35.net',
+                'ns-16.awsdns-02.com',
+                'ns-1644.awsdns-13.co.uk',
+                'ns-1384.awsdns-45.org'
+            ]
+        )
+
     ### ACM CERTIFICATE ###
 
         acm = _acm.Certificate(

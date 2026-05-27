@@ -68,6 +68,33 @@ class WebUiHandlerTests(unittest.TestCase):
         self.assertIn('example.com', response['body'])
         fetch_identity.assert_called_once_with('test-token')
 
+    def test_get_request_prefers_authorizer_email_over_token_identity(self):
+        event = {
+            'requestContext': {
+                'http': {
+                    'method': 'GET'
+                },
+                'authorizer': {
+                    'lambda': {
+                        'email': 'realuser@example.com'
+                    }
+                },
+            },
+            'headers': {
+                'Authorization': 'test-token'
+            },
+        }
+
+        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'uid-1234', 'region': 'use1'}) as fetch_identity, \
+                patch.object(home_shared, '_get_env_table', return_value=object()), \
+                patch.object(home_shared, '_list_watchlist_domains', return_value=[]), \
+                patch.object(home_shared, '_get_matched_slds', return_value=set()):
+            response = home_shared._handle_request(event, None)  # noqa: SLF001
+
+        self.assertEqual(response['statusCode'], 200)
+        self.assertIn('realuser@example.com', response['body'])
+        fetch_identity.assert_not_called()
+
     def test_post_get_domain_sections_success(self):
         event = _post_event('GetDomainSections')
 

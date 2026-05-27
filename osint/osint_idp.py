@@ -104,7 +104,7 @@ class OsintIdp(Stack):
             deletion_protection = True,
             removal_policy = RemovalPolicy.RETAIN,
             feature_plan = _cognito.FeaturePlan.ESSENTIALS,
-            self_sign_up_enabled = True,
+            self_sign_up_enabled = Config.AUTH_SELF_SIGN_UP_ENABLED,
             sign_in_aliases = _cognito.SignInAliases(
                 email = True
             ),
@@ -115,12 +115,11 @@ class OsintIdp(Stack):
             sign_in_policy = _cognito.SignInPolicy(
                 allowed_first_auth_factors = _cognito.AllowedFirstAuthFactors(
                     password = True,
-                    email_otp = True,
-                    passkey = True
+                    email_otp = True
                 )
             ),
             auto_verify = _cognito.AutoVerifiedAttrs(
-                email = False,
+                email = True,
                 phone = False
             ),
             account_recovery = _cognito.AccountRecovery.NONE,
@@ -403,6 +402,20 @@ class OsintIdp(Stack):
             )
         )
 
+        role.add_to_policy(
+            _iam.PolicyStatement(
+                actions = [
+                    'cognito-idp:SignUp',
+                    'cognito-idp:ConfirmSignUp',
+                    'cognito-idp:InitiateAuth',
+                    'cognito-idp:RespondToAuthChallenge'
+                ],
+                resources = [
+                    userpool.user_pool_arn
+                ]
+            )
+        )
+
         credentials.grant_read(role)
 
     ### AUTH LAMBDA FUNCTION ###
@@ -418,6 +431,8 @@ class OsintIdp(Stack):
                 HOME_ENDPOINT = f"https://{Config.API_DOMAIN}/home",
                 COGNITO_DOMAIN = f"https://{Config.SUBDOMAIN}",
                 COGNITO_REDIRECT_URI = Config.COGNITO_REDIRECT_URI,
+                COGNITO_USER_POOL_ID = userpool.user_pool_id,
+                AUTH_SELF_SIGN_UP_ENABLED = 'true' if Config.AUTH_SELF_SIGN_UP_ENABLED else 'false',
                 CDN_BASE_URL = Config.CDN_BASE_URL
             ),
             timeout = Duration.seconds(30),

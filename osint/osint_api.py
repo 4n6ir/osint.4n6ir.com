@@ -10,6 +10,7 @@ from aws_cdk import (
     aws_logs as _logs,
     aws_route53 as _route53,
     aws_route53_targets as _r53targets,
+    aws_iam as _iam,
     aws_ssm as _ssm
 )
 
@@ -73,6 +74,13 @@ class OsintApi(Stack):
             removal_policy = RemovalPolicy.DESTROY
         )
 
+        authorizer_fn.add_to_role_policy(
+            _iam.PolicyStatement(
+                actions=['cognito-idp:GetUser'],
+                resources=['*'],
+            )
+        )
+
     ### CUSTOM DOMAIN ###
 
         domain_name = _apigw.DomainName(
@@ -122,7 +130,7 @@ class OsintApi(Stack):
         # GET /auth
         api.add_routes(
             path = '/auth',
-            methods = [_apigw.HttpMethod.GET],
+            methods = [_apigw.HttpMethod.GET, _apigw.HttpMethod.POST],
             integration = _integrations.HttpLambdaIntegration(
                 'authintegration',
                 auth_lambda

@@ -334,6 +334,43 @@ def _fetch_user_identity(authorization_header):
     return identity
 
 
+def _identity_from_authorizer_context(event):
+    request_context = event.get('requestContext') or {}
+    authorizer = request_context.get('authorizer') or {}
+    default_region = os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION') or 'us-east-1'
+
+    candidates = []
+    if isinstance(authorizer, dict):
+        lambda_context = authorizer.get('lambda')
+        if isinstance(lambda_context, dict):
+            candidates.append(lambda_context)
+        candidates.append(authorizer)
+
+    for context in candidates:
+        email = str(context.get('email') or '').strip().lower()
+        if not email:
+            continue
+
+        region = str(
+            context.get('region')
+            or context.get('custom:region')
+            or context.get('zoneinfo')
+            or context.get('locale')
+            or default_region
+            or 'unknown'
+        )
+        return {'email': email, 'region': region}
+
+    return {}
+
+
+def _resolve_identity(event, authorization_header):
+    authorizer_identity = _identity_from_authorizer_context(event)
+    if authorizer_identity.get('email'):
+        return authorizer_identity
+    return _fetch_user_identity(authorization_header)
+
+
 def _normalize_domain(entry):
     if not isinstance(entry, str):
         return ''
@@ -1782,11 +1819,10 @@ def _render_form(authorization_header, identity, domains=None, matched_slds=None
     domains_monitor_subscription = domains_monitor_subscription or {}
     domains_monitor_subscription_json = json.dumps(domains_monitor_subscription, default=_json_safe_value)
     subscription_email = html.escape(str(domains_monitor_subscription.get('email', '')).strip())
-    subscription_email_row = f'<br><strong>Email:</strong> {subscription_email}' if subscription_email else ''
     subscription_preview = f'<div hidden><strong>Email:</strong> {subscription_email}</div>' if subscription_email else ''
     sponsor_value = user_extra_fields.get('sponsor', '').strip().lower() if user_extra_fields else ''
     if sponsor_value == 'data':
-        configuration_row = '<br><strong>Configuration:</strong> <a class="inline-link" href="#" onclick="showSettings(); return false;">Settings</a>' + subscription_email_row
+        configuration_row = '<br><strong>Configuration:</strong> <a class="inline-link" href="#" onclick="showSettings(); return false;">Settings</a>'
     else:
         configuration_row = ''
 
@@ -3917,7 +3953,7 @@ def _handle_request(event, _context):
     authorization_header = _get_authorization(event)
 
     if method == 'GET':
-        identity = _fetch_user_identity(authorization_header)
+        identity = _resolve_identity(event, authorization_header)
         email = identity.get('email', 'unknown')
         watchlist_table = _get_env_table('WATCHLIST_TABLE', 'watchlist')
         users_table = _get_env_table('USERS_TABLE', 'users')
@@ -3963,7 +3999,7 @@ def _handle_request(event, _context):
         entry = _normalize_domain(payload.get('entry', ''))
 
         if action == 'GetDomainSections':
-            identity = _fetch_user_identity(authorization_header)
+            identity = _resolve_identity(event, authorization_header)
             email = identity.get('email', 'unknown')
             try:
                 subscription_table = _get_env_table('SUBSCRIPTION_TABLE', 'subscription')
@@ -3998,7 +4034,7 @@ def _handle_request(event, _context):
             })
 
         if action == 'GetDomainPermutations':
-            identity = _fetch_user_identity(authorization_header)
+            identity = _resolve_identity(event, authorization_header)
             email = identity.get('email', 'unknown')
             try:
                 permutation_states = _get_domain_permutation_entries(entry, email)
@@ -4016,7 +4052,7 @@ def _handle_request(event, _context):
             })
 
         if action == 'ToggleDomainPermutation':
-            identity = _fetch_user_identity(authorization_header)
+            identity = _resolve_identity(event, authorization_header)
             email = identity.get('email', 'unknown')
             success, message = _set_domain_permutation_enabled(
                 entry,
@@ -4032,7 +4068,7 @@ def _handle_request(event, _context):
             if error:
                 return _json_response({'ok': False, 'message': error}, status_code=400)
 
-            identity = _fetch_user_identity(authorization_header)
+            identity = _resolve_identity(event, authorization_header)
             cognito_email = identity.get('email', 'unknown')
             subscription_table = _get_env_table('SUBSCRIPTION_TABLE', 'subscription')
             try:
@@ -4073,7 +4109,7 @@ def _handle_request(event, _context):
                 }
             )
 
-        identity = _fetch_user_identity(authorization_header)
+        identity = _resolve_identity(event, authorization_header)
         email = identity.get('email', 'unknown')
         domain, success, message = _process_submission(entry, email, action)
 

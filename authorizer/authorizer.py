@@ -1,31 +1,62 @@
-import os
-import requests
+import boto3
+from botocore.exceptions import ClientError
+
+
+COGNITO_IDP = boto3.client('cognito-idp')
+
+
+def _header_value(headers, name):
+    if not isinstance(headers, dict):
+        return ''
+
+    wanted = str(name or '').strip().lower()
+    for key, value in headers.items():
+        if str(key).strip().lower() == wanted:
+            return str(value or '')
+    return ''
+
+
+def _extract_access_token(event):
+    headers = event.get('headers') or {}
+    authorization = _header_value(headers, 'authorization').strip()
+    if not authorization:
+        return ''
+
+    if authorization.lower().startswith('bearer '):
+        return authorization.split(' ', 1)[1].strip()
+    return authorization
+
+
+def _to_bool(value):
+    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def handler(event, _context):
-    """
-    Lambda authorizer for token-based authorization.
-    Validates Authorization header and returns user context.
-    """
-    url = os.getenv('USER_INFO_ENDPOINT', 'https://hello.dev.osint.4n6ir.com/oauth2/userInfo')
-    headers = {
-        'Authorization': str(event['headers']['authorization'])
+    access_token = _extract_access_token(event)
+    if not access_token:
+        return {'isAuthorized': False}
+
+    try:
+        response = COGNITO_IDP.get_user(AccessToken=access_token)
+    except ClientError:
+        return {'isAuthorized': False}
+
+    attributes = {
+        item.get('Name'): item.get('Value', '')
+        for item in response.get('UserAttributes', [])
+        if isinstance(item, dict)
     }
-    response = requests.get(url, headers=headers, timeout=5)
+    email = attributes.get('email', '')
 
-    if response.status_code != 200 or 'email' not in response.json():
-        authorized = {
-            "isAuthorized": False
-        }
-    else:
-        authorized = {
-            "isAuthorized": True,
-            "context": {
-                "sub": response.json().get('sub'),
-                "email_verified": response.json().get('email_verified'),
-                "email": response.json().get('email'),
-                "username": response.json().get('username')
-            }
-        }
+    if not email:
+        return {'isAuthorized': False}
 
-    return authorized
+    return {
+        'isAuthorized': True,
+        'context': {
+            'sub': attributes.get('sub', ''),
+            'email_verified': _to_bool(attributes.get('email_verified', 'false')),
+            'email': email,
+            'username': response.get('Username', ''),
+        },
+    }
