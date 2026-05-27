@@ -56,5 +56,6 @@ class Config:
     COGNITO_APP_CLIENT_NAME = "osint"
     COGNITO_FROM_EMAIL = "hello@4n6ir.com"
     COGNITO_REDIRECT_URI = f"https://{API_DOMAIN}/auth"
+    ACCESS_TOKEN_COOKIE_NAME = "osint_prod_at"
     # True: users can self-register via /auth. False: invite-only (sign-in only).
     AUTH_SELF_SIGN_UP_ENABLED = True

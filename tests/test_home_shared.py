@@ -1,11 +1,9 @@
 # pyright: reportPrivateUsage=none, reportUnusedVariable=none
 # pylint: disable=protected-access,unused-variable
 
-import base64
 from decimal import Decimal
 import json
 import os
-import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -25,7 +23,12 @@ def _post_event(action, entry='example.com', authorization='token'):
         'requestContext': {
             'http': {
                 'method': 'POST'
-            }
+            },
+            'authorizer': {
+                'lambda': {
+                    'email': 'user@example.com'
+                }
+            },
         },
         'headers': {
             'Authorization': authorization
@@ -36,7 +39,6 @@ def _post_event(action, entry='example.com', authorization='token'):
 
 class WebUiHandlerTests(unittest.TestCase):
     def setUp(self):
-        home_shared.IDENTITY_CACHE.clear()
         home_shared.TABLE_CACHE.clear()
         os.environ['AWS_REGION'] = 'us-east-1'
         os.environ['TLD_TABLE'] = 'tld-table'
@@ -49,15 +51,20 @@ class WebUiHandlerTests(unittest.TestCase):
             'requestContext': {
                 'http': {
                     'method': 'GET'
-                }
+                },
+                'authorizer': {
+                    'lambda': {
+                        'email': 'user@example.com',
+                        'region': 'use1',
+                    }
+                },
             },
             'headers': {
                 'Authorization': 'test-token'
             },
         }
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com', 'region': 'use1'}) as fetch_identity, \
-                patch.object(home_shared, '_get_env_table', return_value=object()), \
+        with patch.object(home_shared, '_get_env_table', return_value=object()), \
                 patch.object(home_shared, '_list_watchlist_domains', return_value=['example.com']), \
                 patch.object(home_shared, '_get_matched_slds', return_value={'example'}):
             response = home_shared._handle_request(event, None)  # noqa: SLF001
@@ -66,7 +73,6 @@ class WebUiHandlerTests(unittest.TestCase):
         self.assertEqual(response['headers']['Content-Type'], 'text/html; charset=utf-8')
         self.assertIn('Gone Fishing!', response['body'])
         self.assertIn('example.com', response['body'])
-        fetch_identity.assert_called_once_with('test-token')
 
     def test_get_request_prefers_authorizer_email_over_token_identity(self):
         event = {
@@ -85,23 +91,56 @@ class WebUiHandlerTests(unittest.TestCase):
             },
         }
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'uid-1234', 'region': 'use1'}) as fetch_identity, \
-                patch.object(home_shared, '_get_env_table', return_value=object()), \
+        with patch.object(home_shared, '_get_env_table', return_value=object()), \
                 patch.object(home_shared, '_list_watchlist_domains', return_value=[]), \
                 patch.object(home_shared, '_get_matched_slds', return_value=set()):
             response = home_shared._handle_request(event, None)  # noqa: SLF001
 
         self.assertEqual(response['statusCode'], 200)
         self.assertIn('realuser@example.com', response['body'])
-        fetch_identity.assert_not_called()
+
+    def test_get_request_without_authorizer_context_returns_401(self):
+        event = {
+            'requestContext': {
+                'http': {
+                    'method': 'GET'
+                }
+            },
+            'headers': {
+                'Authorization': 'test-token'
+            },
+        }
+
+        response = home_shared._handle_request(event, None)  # noqa: SLF001
+
+        self.assertEqual(response['statusCode'], 401)
+        self.assertIn('Authentication required', response['body'])
+
+    def test_post_request_without_authorizer_context_returns_401_json(self):
+        event = {
+            'requestContext': {
+                'http': {
+                    'method': 'POST'
+                }
+            },
+            'headers': {
+                'Authorization': 'test-token'
+            },
+            'body': json.dumps({'action': 'GetDomainSections', 'entry': 'example.com'}),
+        }
+
+        response = home_shared._handle_request(event, None)  # noqa: SLF001
+
+        self.assertEqual(response['statusCode'], 401)
+        self.assertEqual(response['headers']['Content-Type'], 'application/json; charset=utf-8')
+        self.assertEqual(json.loads(response['body'])['message'], 'Authentication required.')
 
     def test_post_get_domain_sections_success(self):
         event = _post_event('GetDomainSections')
 
         expected_sections = {'suspect': {'openSourceIntelligence': [], 'domainsMonitorSubscription': []}}
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_get_env_table', return_value=object()), \
+        with patch.object(home_shared, '_get_env_table', return_value=object()), \
                 patch.object(home_shared, '_get_domains_monitor_subscription', return_value={'email': 'user@example.com'}), \
                 patch.object(home_shared, '_get_domain_sections', return_value=expected_sections), \
             patch.object(home_shared, '_get_permutation_count', return_value=7):
@@ -116,8 +155,7 @@ class WebUiHandlerTests(unittest.TestCase):
     def test_post_get_domain_sections_failure_falls_back(self):
         event = _post_event('GetDomainSections')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_get_domain_sections', side_effect=TypeError('boom')):
+        with patch.object(home_shared, '_get_domain_sections', side_effect=TypeError('boom')):
             response = home_shared._handle_request(event, None)  # noqa: SLF001
 
         payload = json.loads(response['body'])
@@ -127,20 +165,17 @@ class WebUiHandlerTests(unittest.TestCase):
     def test_post_get_domain_sections_action_is_case_and_whitespace_insensitive(self):
         event = _post_event('   GetDomainSections   ')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}) as fetch_identity, \
-                patch.object(home_shared, '_get_domain_sections', return_value={'suspect': {'openSourceIntelligence': [], 'domainsMonitorSubscription': []}}) as get_sections, \
+        with patch.object(home_shared, '_get_domain_sections', return_value={'suspect': {'openSourceIntelligence': [], 'domainsMonitorSubscription': []}}) as get_sections, \
             patch.object(home_shared, '_get_permutation_count', return_value=1) as get_count:
             home_shared._handle_request(event, None)  # noqa: SLF001
 
         get_sections.assert_called_once_with('example.com', 'user@example.com')
         get_count.assert_called_once_with('example.com', 'user@example.com')
-        fetch_identity.assert_called_once_with('token')
 
     def test_post_get_domain_permutations_success(self):
         event = _post_event('GetDomainPermutations')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_get_domain_permutation_entries', return_value=[
+        with patch.object(home_shared, '_get_domain_permutation_entries', return_value=[
                     {'permutation': 'a', 'enabled': 'ON', 'unique_domains': 7, 'unique_sources': 3},
                     {'permutation': 'b', 'enabled': 'OFF', 'unique_domains': 1, 'unique_sources': 1},
                 ]):
@@ -156,8 +191,7 @@ class WebUiHandlerTests(unittest.TestCase):
     def test_post_get_domain_permutations_failure_falls_back(self):
         event = _post_event('GetDomainPermutations')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_get_domain_permutation_entries', side_effect=TypeError('boom')):
+        with patch.object(home_shared, '_get_domain_permutation_entries', side_effect=TypeError('boom')):
             response = home_shared._handle_request(event, None)  # noqa: SLF001
 
         payload = json.loads(response['body'])
@@ -167,8 +201,7 @@ class WebUiHandlerTests(unittest.TestCase):
     def test_post_put_item_success_renders_submission_result(self):
         event = _post_event('PutItem')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_process_submission', return_value=('example.com', True, 'saved')), \
+        with patch.object(home_shared, '_process_submission', return_value=('example.com', True, 'saved')), \
                 patch.object(home_shared, '_render_result', return_value='<html>ok</html>') as render_result:
             response = home_shared._handle_request(event, None)  # noqa: SLF001
 
@@ -178,8 +211,7 @@ class WebUiHandlerTests(unittest.TestCase):
     def test_post_put_item_failure_renders_failure_message(self):
         event = _post_event('PutItem', entry='bad')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_process_submission', return_value=('bad', False, 'Invalid domain')), \
+        with patch.object(home_shared, '_process_submission', return_value=('bad', False, 'Invalid domain')), \
                 patch.object(home_shared, '_render_result', return_value='<html>fail</html>') as render_result:
             response = home_shared._handle_request(event, None)  # noqa: SLF001
 
@@ -189,8 +221,7 @@ class WebUiHandlerTests(unittest.TestCase):
     def test_post_delete_item_success_renders_deletion_result(self):
         event = _post_event('DeleteItem')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_process_submission', return_value=('example.com', True, 'deleted')), \
+        with patch.object(home_shared, '_process_submission', return_value=('example.com', True, 'deleted')), \
                 patch.object(home_shared, '_render_result', return_value='<html>deleted</html>') as render_result:
             response = home_shared._handle_request(event, None)  # noqa: SLF001
 
@@ -200,8 +231,7 @@ class WebUiHandlerTests(unittest.TestCase):
     def test_post_delete_item_failure_renders_failure_message(self):
         event = _post_event('DeleteItem')
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_process_submission', return_value=('example.com', False, 'Nothing to delete.')), \
+        with patch.object(home_shared, '_process_submission', return_value=('example.com', False, 'Nothing to delete.')), \
                 patch.object(home_shared, '_render_result', return_value='<html>delete-fail</html>') as render_result:
             response = home_shared._handle_request(event, None)
 
@@ -213,7 +243,12 @@ class WebUiHandlerTests(unittest.TestCase):
             'requestContext': {
                 'http': {
                     'method': 'POST'
-                }
+                },
+                'authorizer': {
+                    'lambda': {
+                        'email': 'user@example.com'
+                    }
+                },
             },
             'headers': {
                 'Authorization': 'token'
@@ -221,8 +256,7 @@ class WebUiHandlerTests(unittest.TestCase):
             'body': '{invalid-json',
         }
 
-        with patch.object(home_shared, '_fetch_user_identity', return_value={'email': 'user@example.com'}), \
-                patch.object(home_shared, '_process_submission', return_value=('example.com', True, 'saved')) as process_submission, \
+        with patch.object(home_shared, '_process_submission', return_value=('example.com', True, 'saved')) as process_submission, \
                 patch.object(home_shared, '_render_result', return_value='<html>ok</html>'):
             home_shared._handle_request(event, None)  # noqa: SLF001
 
@@ -277,90 +311,6 @@ class DomainValidationTests(unittest.TestCase):
         is_valid, msg = home_shared._validate_domain('a.b.c.example.com')
         self.assertFalse(is_valid)
         self.assertIn('exactly one dot', msg.lower())
-
-
-class JwtDecodingTests(unittest.TestCase):
-    def test_decode_jwt_payload_no_authorization(self):
-        payload = home_shared._decode_jwt_payload('')
-        self.assertEqual(payload, {})
-
-    def test_decode_jwt_payload_invalid_format(self):
-        payload = home_shared._decode_jwt_payload('invalid-token')
-        self.assertEqual(payload, {})
-
-    def test_decode_jwt_payload_valid_jwt(self):
-        token_payload = {'email': 'user@example.com', 'region': 'us-east-1'}
-        encoded_payload = base64.urlsafe_b64encode(json.dumps(token_payload).encode()).decode().rstrip('=')
-        token = f'Bearer header.{encoded_payload}.signature'
-
-        payload = home_shared._decode_jwt_payload(token)
-        self.assertEqual(payload['email'], 'user@example.com')
-        self.assertEqual(payload['region'], 'us-east-1')
-
-    def test_decode_jwt_payload_non_dict_payload(self):
-        encoded_payload = base64.urlsafe_b64encode(b'"not a dict"').decode().rstrip('=')
-        token = f'Bearer header.{encoded_payload}.signature'
-
-        payload = home_shared._decode_jwt_payload(token)
-        self.assertEqual(payload, {})
-
-    def test_decode_jwt_payload_malformed_json(self):
-        encoded_payload = base64.urlsafe_b64encode(b'{invalid json}').decode().rstrip('=')
-        token = f'Bearer header.{encoded_payload}.signature'
-
-        payload = home_shared._decode_jwt_payload(token)
-        self.assertEqual(payload, {})
-
-
-class IdentityBuildingTests(unittest.TestCase):
-    def test_build_identity_with_email_field(self):
-        payload = {'email': 'test@example.com', 'region': 'us-west-2'}
-        identity = home_shared._build_identity(payload, 'default-region')
-        self.assertEqual(identity['email'], 'test@example.com')
-        self.assertEqual(identity['region'], 'us-west-2')
-
-    def test_build_identity_fallback_to_username(self):
-        payload = {'username': 'testuser', 'region': 'us-east-1'}
-        identity = home_shared._build_identity(payload, 'default-region')
-        self.assertEqual(identity['email'], 'testuser')
-
-    def test_build_identity_fallback_to_cognito_username(self):
-        payload = {'cognito:username': 'cognito-user', 'zoneinfo': 'UTC'}
-        identity = home_shared._build_identity(payload, 'default-region')
-        self.assertEqual(identity['email'], 'cognito-user')
-        self.assertEqual(identity['region'], 'UTC')
-
-    def test_build_identity_fallback_to_custom_region(self):
-        payload = {'email': 'test@example.com', 'custom:region': 'ap-south-1'}
-        identity = home_shared._build_identity(payload, 'default-region')
-        self.assertEqual(identity['region'], 'ap-south-1')
-
-    def test_build_identity_all_unknown(self):
-        identity = home_shared._build_identity({}, 'default-region')
-        self.assertEqual(identity['email'], 'unknown')
-        self.assertEqual(identity['region'], 'default-region')
-
-
-class AuthorizationNormalizationTests(unittest.TestCase):
-    def test_normalize_authorization_with_bearer_prefix(self):
-        result = home_shared._normalize_authorization('Bearer token123')  # noqa: SLF001
-        self.assertEqual(result, 'Bearer token123')
-
-    def test_normalize_authorization_without_prefix(self):
-        result = home_shared._normalize_authorization('token123')  # noqa: SLF001
-        self.assertEqual(result, 'Bearer token123')
-
-    def test_normalize_authorization_empty_string(self):
-        result = home_shared._normalize_authorization('')  # noqa: SLF001
-        self.assertEqual(result, '')
-
-    def test_normalize_authorization_whitespace_only(self):
-        result = home_shared._normalize_authorization('   ')  # noqa: SLF001
-        self.assertEqual(result, '')
-
-    def test_normalize_authorization_case_insensitive_prefix(self):
-        result = home_shared._normalize_authorization('bearer token123')  # noqa: SLF001
-        self.assertEqual(result, 'bearer token123')
 
 
 class ProcessSubmissionTests(unittest.TestCase):
@@ -793,76 +743,6 @@ class RenderResultTests(unittest.TestCase):
         with patch.object(home_shared, 'LOGOUT_ENDPOINT', 'https://hello.dev.osint.4n6ir.com/logout'):
             html = home_shared._render_result('Invalid domain', success=False, authorization_header='token')  # noqa: SLF001
         self.assertIn('window.location.assign("https://hello.dev.osint.4n6ir.com/auth?action=logout")', html)
-
-
-class FetchUserIdentityTests(unittest.TestCase):
-    def setUp(self):
-        os.environ['AWS_REGION'] = 'us-east-1'
-        home_shared.IDENTITY_CACHE.clear()
-
-    def test_fetch_user_identity_no_authorization(self):
-        identity = home_shared._fetch_user_identity('')  # noqa: SLF001
-        self.assertEqual(identity['email'], 'unknown')
-        self.assertEqual(identity['region'], 'us-east-1')
-
-    def test_fetch_user_identity_cached_entry(self):
-        token = 'Bearer test-token'
-        cached_identity = {'email': 'cached@example.com', 'region': 'us-west-2'}
-        home_shared.IDENTITY_CACHE['Bearer test-token'] = (time.time(), cached_identity)  # noqa: SLF001
-
-        with patch.object(home_shared, '_normalize_authorization', return_value='Bearer test-token'):
-            identity = home_shared._fetch_user_identity(token)  # noqa: SLF001
-
-        self.assertEqual(identity['email'], 'cached@example.com')
-
-    def test_fetch_user_identity_expired_cache(self):
-        token = 'Bearer test-token'
-        old_time = time.time() - (home_shared.IDENTITY_CACHE_TTL_SECONDS + 10)
-        home_shared.IDENTITY_CACHE['Bearer test-token'] = (old_time, {'email': 'old@example.com'})  # noqa: SLF001
-
-        with patch.object(home_shared, '_normalize_authorization', return_value='Bearer test-token'), \
-                patch.object(home_shared, '_decode_jwt_payload', return_value={}):
-            identity = home_shared._fetch_user_identity(token)  # noqa: SLF001
-
-        self.assertEqual(identity['email'], 'unknown')
-
-    def test_fetch_user_identity_http_request_success(self):
-        token = 'Bearer test-token'
-        normalized_token = 'Bearer test-token'
-
-        mock_response = type('Response', (), {
-            'json': lambda self: {'email': 'http@example.com', 'region': 'eu-west-1'},
-            'ok': True,
-        })()
-
-        mock_session = Mock()
-        mock_session.get.return_value = mock_response
-
-        with patch.object(home_shared, '_normalize_authorization', return_value=normalized_token), \
-            patch.object(home_shared, 'HTTP_SESSION', mock_session):
-            home_shared.USER_INFO_ENDPOINT = 'https://userinfo'
-            identity = home_shared._fetch_user_identity(token)  # noqa: SLF001
-
-        self.assertEqual(identity['email'], 'http@example.com')
-        self.assertEqual(identity['region'], 'eu-west-1')
-
-    def test_fetch_user_identity_http_request_failure_falls_back_to_jwt(self):
-        import requests
-
-        token = 'Bearer test-token'
-        normalized_token = 'Bearer test-token'
-
-        mock_session = Mock()
-        mock_session.get.side_effect = requests.RequestException('Network error')
-
-        with patch.object(home_shared, '_normalize_authorization', return_value=normalized_token), \
-            patch.object(home_shared, 'HTTP_SESSION', mock_session), \
-                patch.object(home_shared, '_decode_jwt_payload', return_value={'region': 'ap-south-1'}):
-            home_shared.USER_INFO_ENDPOINT = 'https://userinfo'
-            identity = home_shared._fetch_user_identity(token)  # noqa: SLF001
-
-        self.assertEqual(identity['email'], 'unknown')
-        self.assertEqual(identity['region'], 'ap-south-1')
 
 
 class TableNameResolutionTests(unittest.TestCase):

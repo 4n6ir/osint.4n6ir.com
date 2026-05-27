@@ -1,8 +1,14 @@
 import boto3
+import os
+from urllib.parse import unquote
 from botocore.exceptions import ClientError
 
 
 COGNITO_IDP = boto3.client('cognito-idp')
+ACCESS_TOKEN_COOKIE_NAME = str(os.getenv('ACCESS_TOKEN_COOKIE_NAME', 'osint_at')).strip() or 'osint_at'
+COOKIE_NAME_CANDIDATES = tuple(
+    dict.fromkeys([ACCESS_TOKEN_COOKIE_NAME, 'osint_at'])
+)
 
 
 def _header_value(headers, name):
@@ -17,14 +23,50 @@ def _header_value(headers, name):
 
 
 def _extract_access_token(event):
-    headers = event.get('headers') or {}
-    authorization = _header_value(headers, 'authorization').strip()
-    if not authorization:
+    def _normalize_token(raw_value):
+        token = unquote(str(raw_value or '').strip()).strip('"\'')
+        if token.lower().startswith('bearer '):
+            token = token.split(' ', 1)[1].strip()
+        return token
+
+    def _token_from_cookie_parts(parts):
+        for part in parts:
+            name, sep, value = part.strip().partition('=')
+            if sep and name.strip() in COOKIE_NAME_CANDIDATES:
+                token = _normalize_token(value)
+                if token:
+                    return token
         return ''
 
-    if authorization.lower().startswith('bearer '):
-        return authorization.split(' ', 1)[1].strip()
-    return authorization
+    headers = event.get('headers') or {}
+    authorization = _header_value(headers, 'authorization').strip()
+    if authorization:
+        if authorization.lower().startswith('bearer '):
+            return authorization.split(' ', 1)[1].strip()
+        return _normalize_token(authorization)
+
+    cookie_header = _header_value(headers, 'cookie').strip()
+    if cookie_header:
+        token = _token_from_cookie_parts(cookie_header.split(';'))
+        if token:
+            return token
+
+    cookie_values = event.get('cookies') or []
+    if isinstance(cookie_values, list):
+        token = _token_from_cookie_parts(cookie_values)
+        if token:
+            return token
+
+    multivalue_headers = event.get('multiValueHeaders') or {}
+    if isinstance(multivalue_headers, dict):
+        for key, values in multivalue_headers.items():
+            if str(key).strip().lower() != 'cookie' or not isinstance(values, list):
+                continue
+            token = _token_from_cookie_parts(values)
+            if token:
+                return token
+
+    return ''
 
 
 def _to_bool(value):

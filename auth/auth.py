@@ -22,6 +22,8 @@ HTML_CONTENT_TYPE = 'text/html; charset=utf-8'
 PAGE_TITLE = 'No Fishing!'
 PAGE_SUBTITLE = 'Passwordless email sign-in and account creation'
 AUTH_SELF_SIGN_UP_ENV = 'AUTH_SELF_SIGN_UP_ENABLED'
+ACCESS_TOKEN_COOKIE_NAME = str(os.getenv('ACCESS_TOKEN_COOKIE_NAME', 'osint_at')).strip() or 'osint_at'
+ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS = 3600
 
 
 def _self_sign_up_enabled() -> bool:
@@ -41,8 +43,8 @@ def _html_response(status_code: int, body: str) -> dict:
     }
 
 
-def _redirect_response(location: str) -> dict:
-    return {
+def _redirect_response(location: str, cookies: list[str] | None = None) -> dict:
+    response = {
         'statusCode': 302,
         'body': '',
         'headers': {
@@ -51,6 +53,28 @@ def _redirect_response(location: str) -> dict:
             'Pragma': 'no-cache',
         },
     }
+    if cookies:
+        response['cookies'] = cookies
+        # Compatibility fallbacks for integrations/tooling that expect Set-Cookie headers.
+        response['multiValueHeaders'] = {'Set-Cookie': cookies}
+        response['headers']['Set-Cookie'] = cookies[0]
+    return response
+
+
+def _access_token_cookie(access_token: str) -> str:
+    safe_value = str(access_token or '').strip()
+    return (
+        f'{ACCESS_TOKEN_COOKIE_NAME}={safe_value}; '
+        f'Max-Age={ACCESS_TOKEN_COOKIE_MAX_AGE_SECONDS}; '
+        'Path=/; Secure; HttpOnly; SameSite=Lax'
+    )
+
+
+def _clear_access_token_cookie() -> str:
+    return (
+        f'{ACCESS_TOKEN_COOKIE_NAME}=; '
+        'Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax'
+    )
 
 
 def _render_default_page(cdn_base_url: str, email: str = '', message: str = '', is_auth_issue: bool = False) -> str:
@@ -80,11 +104,10 @@ def _get_credentials() -> tuple[str, str]:
     return payload['CLIENT_ID'], payload['CLIENT_SECRET']
 
 
-def _get_runtime_config() -> tuple[str, str, str, str]:
+def _get_runtime_config() -> tuple[str, str, str]:
     return (
         os.environ['COGNITO_DOMAIN'],
         os.environ['COGNITO_REDIRECT_URI'],
-        os.environ['HOME_ENDPOINT'],
         os.environ['CDN_BASE_URL'],
     )
 
@@ -387,58 +410,6 @@ def _signin_confirm_form(email: str, session: str) -> str:
 '''
 
 
-def _home_bridge(access_token: str, home_endpoint: str, cdn_base_url: str) -> str:
-    return '''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Happy Fishing!</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            margin: 0;
-            background: #f4f7fb;
-            color: #10233c;
-            text-align: center;
-            padding: 56px 20px;
-        }
-
-        img {
-            max-width: 220px;
-        }
-
-        p {
-            color: #486581;
-        }
-    </style>
-    <script>
-        const headers = { 'Authorization': 'Bearer ' + '{access_token}' };
-        fetch('{home_endpoint_url}', { headers: headers })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('home fetch failed');
-                }
-                return response.text();
-            })
-            .then(data => {
-                document.open();
-                document.write(data);
-                document.close();
-            })
-            .catch(() => {
-                document.body.innerHTML = '<p>Signed in. Loading home...</p>';
-                window.location.assign('/home');
-            });
-    </script>
-</head>
-<body>
-    <img src="https://cdn.4n6ir.com/lunker.png" alt="OSINT Logo">
-    <p>Signing you in...</p>
-</body>
-</html>'''.replace('{home_endpoint_url}', home_endpoint).replace('{access_token}', access_token).replace('https://cdn.4n6ir.com', cdn_base_url)
-
-
 def _start_sign_in(email: str, client_id: str, client_secret: str) -> tuple[bool, str, str]:
     response = COGNITO_CLIENT.initiate_auth(
         ClientId=client_id,
@@ -466,7 +437,7 @@ def _resend_signup_confirmation(email: str, client_id: str, client_secret: str) 
     )
 
 
-def _legacy_oauth_code_flow(query: dict, client_id: str, client_secret: str, cognito_domain: str, redirect_uri: str, home_endpoint: str, cdn_base_url: str) -> tuple[int, str] | None:
+def _legacy_oauth_code_flow(query: dict, client_id: str, client_secret: str, cognito_domain: str, redirect_uri: str, cdn_base_url: str) -> dict | None:
     auth_code = query.get('code', [None])[0]
     if not auth_code:
         return None
@@ -480,7 +451,7 @@ def _legacy_oauth_code_flow(query: dict, client_id: str, client_secret: str, cog
             'Please sign in again.',
             is_auth_issue=True,
         )
-        return 400, html_body
+        return _html_response(400, html_body)
 
     b64 = base64.b64encode(f'{client_id}:{client_secret}'.encode()).decode()
     try:
@@ -503,10 +474,10 @@ def _legacy_oauth_code_flow(query: dict, client_id: str, client_secret: str, cog
             cdn_base_url,
             message='Sign-in failed. Please request a fresh code and try again.',
         )
-        return 401, html_body
+        return _html_response(401, html_body)
 
     if response.status_code == 200 and 'access_token' in response.json():
-        return 200, _home_bridge(response.json()['access_token'], home_endpoint, cdn_base_url)
+        return _redirect_response('/home', cookies=[_access_token_cookie(response.json()['access_token'])])
 
     html_body = _page(
         cdn_base_url,
@@ -516,13 +487,13 @@ def _legacy_oauth_code_flow(query: dict, client_id: str, client_secret: str, cog
         'Sign-in failed. Please request a fresh code and try again.',
         is_auth_issue=True,
     )
-    return 401, html_body
+    return _html_response(401, html_body)
 
 
 def handler(event, context):
     del context
 
-    cognito_domain, redirect_uri, home_endpoint, cdn_base_url = _get_runtime_config()
+    cognito_domain, redirect_uri, cdn_base_url = _get_runtime_config()
     client_id, client_secret = _get_credentials()
 
     query = parse_qs(event.get('rawQueryString', ''), keep_blank_values=False)
@@ -537,7 +508,7 @@ def handler(event, context):
                 'logout_uri': redirect_uri,
             })
         )
-        return _redirect_response(logout_url)
+        return _redirect_response(logout_url, cookies=[_clear_access_token_cookie()])
 
     legacy_result = _legacy_oauth_code_flow(
         query,
@@ -545,12 +516,10 @@ def handler(event, context):
         client_secret,
         cognito_domain,
         redirect_uri,
-        home_endpoint,
         cdn_base_url,
     )
-    if legacy_result:
-        code, html_body = legacy_result
-        return _html_response(code, html_body)
+    if legacy_result is not None:
+        return legacy_result
 
     if method != 'POST':
         html_body = _render_default_page(cdn_base_url)
@@ -670,8 +639,7 @@ def handler(event, context):
             access_token = auth.get('AccessToken')
             if not access_token:
                 raise ValueError('Authentication token missing in response.')
-            html_body = _home_bridge(access_token, home_endpoint, cdn_base_url)
-            return _html_response(200, html_body)
+            return _redirect_response('/home', cookies=[_access_token_cookie(access_token)])
 
         html_body = _render_issue_page(cdn_base_url, message='Unsupported action. Please try again.')
         return _html_response(400, html_body)

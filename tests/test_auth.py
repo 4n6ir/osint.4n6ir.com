@@ -14,6 +14,7 @@ os.environ.setdefault('COGNITO_DOMAIN', 'https://auth.example.com')
 os.environ.setdefault('COGNITO_REDIRECT_URI', 'https://app.example.com/auth')
 os.environ.setdefault('HOME_ENDPOINT', 'https://api.example.com/home')
 os.environ.setdefault('CDN_BASE_URL', 'https://cdn.example.com')
+os.environ.setdefault('ACCESS_TOKEN_COOKIE_NAME', 'osint_at')
 
 
 class _FakeCognitoExceptions:
@@ -102,7 +103,7 @@ class AuthHandlerTests(unittest.TestCase):
             SecretHash=unittest.mock.ANY,
         )
 
-    def test_signin_confirm_returns_home_bridge_html(self):
+    def test_signin_confirm_sets_cookie_and_redirects_home(self):
         fake_cognito = Mock()
         fake_cognito.exceptions = _FakeCognitoExceptions
         fake_cognito.respond_to_auth_challenge.return_value = {
@@ -127,9 +128,36 @@ class AuthHandlerTests(unittest.TestCase):
                 None,
             )
 
-        self.assertEqual(response['statusCode'], 200)
-        self.assertIn("fetch('https://api.example.com/home'", response['body'])
-        self.assertIn("window.location.assign('/home')", response['body'])
+        self.assertEqual(response['statusCode'], 302)
+        self.assertEqual(response['headers']['Location'], '/home')
+        self.assertIn('cookies', response)
+        self.assertTrue(any(cookie.startswith('osint_at=access-token-1;') for cookie in response['cookies']))
+        self.assertTrue(any('HttpOnly' in cookie for cookie in response['cookies']))
+        self.assertTrue(any('Secure' in cookie for cookie in response['cookies']))
+
+    def test_signin_confirm_uses_custom_cookie_name_from_env(self):
+        fake_cognito = Mock()
+        fake_cognito.exceptions = _FakeCognitoExceptions
+        fake_cognito.respond_to_auth_challenge.return_value = {
+            'AuthenticationResult': {'AccessToken': 'access-token-1'}
+        }
+
+        with patch.dict(os.environ, {'ACCESS_TOKEN_COOKIE_NAME': 'custom_at'}, clear=False):
+            auth_module = importlib.reload(importlib.import_module('auth.auth'))
+            patch_cognito = patch.object(auth_module, 'COGNITO_CLIENT', fake_cognito)
+            patch_credentials = patch.object(
+                auth_module,
+                '_get_credentials',
+                return_value=('client-id', 'client-secret'),
+            )
+            with patch_cognito, patch_credentials:
+                response = auth_module.handler(
+                    self._event('action=signin_confirm&email=user%40example.com&code=123456&session=session-1'),
+                    None,
+                )
+
+        self.assertEqual(response['statusCode'], 302)
+        self.assertTrue(any(cookie.startswith('custom_at=access-token-1;') for cookie in response['cookies']))
 
     def test_get_invite_only_hides_create_account_button(self):
         with patch.dict(os.environ, {'AUTH_SELF_SIGN_UP_ENABLED': 'false'}, clear=False), patch.object(

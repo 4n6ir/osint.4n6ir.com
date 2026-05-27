@@ -10,8 +10,7 @@ from aws_cdk import (
     aws_logs as _logs,
     aws_route53 as _route53,
     aws_route53_targets as _r53targets,
-    aws_iam as _iam,
-    aws_ssm as _ssm
+    aws_iam as _iam
 )
 
 from constructs import Construct
@@ -31,16 +30,6 @@ class OsintApi(Stack):
 
         hostedzone = dns_stack.hostzone
 
-        layer = _ssm.StringParameter.from_string_parameter_attributes(
-            self, 'layer',
-            parameter_name = Config.REQUESTS_LAYER_PARAM
-        )
-
-        requests = _lambda.LayerVersion.from_layer_version_arn(
-            self, 'requests',
-            layer_version_arn = layer.string_value
-        )
-
     ### ACM CERTIFICATE (us-east-2) ###
 
         acm = _acm.Certificate(
@@ -58,13 +47,10 @@ class OsintApi(Stack):
             code = _lambda.Code.from_asset('authorizer'),
             handler = 'authorizer.handler',
             environment = dict(
-                USER_INFO_ENDPOINT = f"https://{Config.SUBDOMAIN}/oauth2/userInfo"
+                ACCESS_TOKEN_COOKIE_NAME = Config.ACCESS_TOKEN_COOKIE_NAME
             ),
             timeout = Duration.seconds(30),
-            memory_size = 256,
-            layers = [
-                requests
-            ]
+            memory_size = 256
         )
 
         self.authorizerlogs = _logs.LogGroup(
@@ -112,7 +98,7 @@ class OsintApi(Stack):
             'httpauthorizer',
             authorizer_fn,
             response_types = [_authorizers.HttpLambdaResponseType.SIMPLE],
-            identity_source = ['$request.header.Authorization']
+            identity_source = ['$request.header.Cookie']
         )
 
     ### ROUTES ###
@@ -133,7 +119,8 @@ class OsintApi(Stack):
             methods = [_apigw.HttpMethod.GET, _apigw.HttpMethod.POST],
             integration = _integrations.HttpLambdaIntegration(
                 'authintegration',
-                auth_lambda
+                auth_lambda,
+                payload_format_version = _apigw.PayloadFormatVersion.VERSION_2_0
             )
         )
 

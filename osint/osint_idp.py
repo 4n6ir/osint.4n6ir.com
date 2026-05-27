@@ -432,6 +432,7 @@ class OsintIdp(Stack):
                 COGNITO_DOMAIN = f"https://{Config.SUBDOMAIN}",
                 COGNITO_REDIRECT_URI = Config.COGNITO_REDIRECT_URI,
                 COGNITO_USER_POOL_ID = userpool.user_pool_id,
+                ACCESS_TOKEN_COOKIE_NAME = Config.ACCESS_TOKEN_COOKIE_NAME,
                 AUTH_SELF_SIGN_UP_ENABLED = 'true' if Config.AUTH_SELF_SIGN_UP_ENABLED else 'false',
                 CDN_BASE_URL = Config.CDN_BASE_URL
             ),

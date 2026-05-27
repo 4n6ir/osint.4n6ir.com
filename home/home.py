@@ -32,16 +32,12 @@ except ImportError:  # pragma: no cover
 
 API_ENDPOINT = os.getenv('API_ENDPOINT', '')
 LOGOUT_ENDPOINT = os.getenv('LOGOUT_ENDPOINT', '')
-USER_INFO_ENDPOINT = os.getenv('USER_INFO_ENDPOINT', '')
 
 HTTP_SESSION = requests.Session() if requests else None
 DYNAMODB = boto3.resource('dynamodb')
 DYNAMODB_CLIENT = boto3.client('dynamodb')
 
 TABLE_CACHE = {}
-IDENTITY_CACHE = {}
-IDENTITY_CACHE_TTL_SECONDS = 300
-IDENTITY_CACHE_MAX_ENTRIES = 256
 MATCHED_SLD_CACHE = {}
 MATCHED_SLD_CACHE_TTL_SECONDS = 60
 MATCHED_SLD_CACHE_MAX_ENTRIES = 256
@@ -218,122 +214,6 @@ def _sanitize_event_for_logging(event):
     return sanitized
 
 
-def _normalize_authorization(authorization_header):
-    if not isinstance(authorization_header, str):
-        return ''
-
-    normalized = authorization_header.strip()
-    if not normalized:
-        return ''
-
-    if normalized.lower().startswith('bearer '):
-        return normalized
-
-    return f'Bearer {normalized}'
-
-
-def _decode_jwt_payload(authorization_header):
-    normalized = _normalize_authorization(authorization_header)
-    if not normalized or ' ' not in normalized:
-        return {}
-
-    token = normalized.split(' ', 1)[1].strip()
-    parts = token.split('.')
-    if len(parts) != 3:
-        return {}
-
-    payload = parts[1]
-    pad = '=' * (-len(payload) % 4)
-
-    try:
-        raw_payload = base64.urlsafe_b64decode(payload + pad)
-        parsed = json.loads(raw_payload.decode('utf-8'))
-    except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError):
-        return {}
-
-    if not isinstance(parsed, dict):
-        return {}
-
-    return parsed
-
-
-def _build_identity(payload, default_region):
-    email = (
-        payload.get('email')
-        or payload.get('username')
-        or payload.get('cognito:username')
-        or 'unknown'
-    )
-    region = (
-        payload.get('region')
-        or payload.get('custom:region')
-        or payload.get('zoneinfo')
-        or payload.get('locale')
-        or default_region
-        or 'unknown'
-    )
-
-    return {
-        'email': str(email),
-        'region': str(region),
-    }
-
-
-def _get_cached_identity(normalized_authorization):
-    cached_entry = IDENTITY_CACHE.get(normalized_authorization)
-    if not cached_entry:
-        return None
-
-    cached_at, identity = cached_entry
-    if (time.time() - cached_at) > IDENTITY_CACHE_TTL_SECONDS:
-        IDENTITY_CACHE.pop(normalized_authorization, None)
-        return None
-
-    return dict(identity)
-
-
-def _cache_identity(normalized_authorization, identity):
-    if not normalized_authorization or not identity or identity.get('email') == 'unknown':
-        return
-
-    if len(IDENTITY_CACHE) >= IDENTITY_CACHE_MAX_ENTRIES:
-        oldest_key = min(IDENTITY_CACHE, key=lambda key: IDENTITY_CACHE[key][0])
-        IDENTITY_CACHE.pop(oldest_key, None)
-
-    IDENTITY_CACHE[normalized_authorization] = (time.time(), dict(identity))
-
-
-def _fetch_user_identity(authorization_header):
-    default_region = os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION') or 'us-east-1'
-    normalized_authorization = _normalize_authorization(authorization_header)
-    if not normalized_authorization:
-        return {'email': 'unknown', 'region': default_region}
-
-    cached_identity = _get_cached_identity(normalized_authorization)
-    if cached_identity is not None:
-        return cached_identity
-
-    if USER_INFO_ENDPOINT and HTTP_SESSION is not None:
-        try:
-            response = HTTP_SESSION.get(
-                USER_INFO_ENDPOINT,
-                headers={'Authorization': normalized_authorization},
-                timeout=3,
-            )
-            if response.ok:
-                identity = _build_identity(response.json(), default_region)
-                _cache_identity(normalized_authorization, identity)
-                return identity
-        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
-            pass
-        except requests.RequestException:  # type: ignore[union-attr]
-            pass
-
-    identity = _build_identity(_decode_jwt_payload(normalized_authorization), default_region)
-    _cache_identity(normalized_authorization, identity)
-    return identity
-
-
 def _identity_from_authorizer_context(event):
     request_context = event.get('requestContext') or {}
     authorizer = request_context.get('authorizer') or {}
@@ -365,10 +245,11 @@ def _identity_from_authorizer_context(event):
 
 
 def _resolve_identity(event, authorization_header):
+    del authorization_header
     authorizer_identity = _identity_from_authorizer_context(event)
     if authorizer_identity.get('email'):
         return authorizer_identity
-    return _fetch_user_identity(authorization_header)
+    return {}
 
 
 def _normalize_domain(entry):
@@ -463,7 +344,7 @@ def _query_user_record(table, email):
     if not email or email == 'unknown':
         return {}
 
-    for sk in (f'OSTIN#{email}#', _user_sk(email)):
+    for sk in (f'OSINT#{email}#', _user_sk(email)):
         try:
             response = table.query(
                 KeyConditionExpression=Key('pk').eq(_user_pk()) & Key('sk').eq(sk),
@@ -3951,10 +3832,23 @@ def _handle_request(event, _context):
 
     method = _get_method(event)
     authorization_header = _get_authorization(event)
+    identity = _resolve_identity(event, authorization_header)
+    email = str(identity.get('email') or '').strip().lower()
+
+    if not email or email == 'unknown':
+        if method == 'POST':
+            return _json_response({'message': 'Authentication required.'}, status_code=401)
+        return _html_response(
+            _render_result(
+                'Authentication required. Please sign in again.',
+                success=False,
+                authorization_header=authorization_header,
+                operation='submission',
+            ),
+            status_code=401,
+        )
 
     if method == 'GET':
-        identity = _resolve_identity(event, authorization_header)
-        email = identity.get('email', 'unknown')
         watchlist_table = _get_env_table('WATCHLIST_TABLE', 'watchlist')
         users_table = _get_env_table('USERS_TABLE', 'users')
         subscription_table = _get_env_table('SUBSCRIPTION_TABLE', 'subscription')
@@ -3999,8 +3893,6 @@ def _handle_request(event, _context):
         entry = _normalize_domain(payload.get('entry', ''))
 
         if action == 'GetDomainSections':
-            identity = _resolve_identity(event, authorization_header)
-            email = identity.get('email', 'unknown')
             try:
                 subscription_table = _get_env_table('SUBSCRIPTION_TABLE', 'subscription')
                 has_domains_monitor = bool(_get_domains_monitor_subscription(subscription_table, email))
@@ -4034,8 +3926,6 @@ def _handle_request(event, _context):
             })
 
         if action == 'GetDomainPermutations':
-            identity = _resolve_identity(event, authorization_header)
-            email = identity.get('email', 'unknown')
             try:
                 permutation_states = _get_domain_permutation_entries(entry, email)
                 permutations = [
@@ -4052,8 +3942,6 @@ def _handle_request(event, _context):
             })
 
         if action == 'ToggleDomainPermutation':
-            identity = _resolve_identity(event, authorization_header)
-            email = identity.get('email', 'unknown')
             success, message = _set_domain_permutation_enabled(
                 entry,
                 email,
@@ -4128,22 +4016,20 @@ def _handle_request(event, _context):
     }
 
 
-def create_handler(api_endpoint, logout_endpoint, user_info_endpoint):
+def create_handler(api_endpoint, logout_endpoint, user_info_endpoint=None):
+    del user_info_endpoint
     def configured_handler(event, context):
         old_api_endpoint = API_ENDPOINT
         old_logout_endpoint = LOGOUT_ENDPOINT
-        old_user_info_endpoint = USER_INFO_ENDPOINT
 
         globals()['API_ENDPOINT'] = api_endpoint
         globals()['LOGOUT_ENDPOINT'] = logout_endpoint
-        globals()['USER_INFO_ENDPOINT'] = user_info_endpoint
 
         try:
             return _handle_request(event, context)
         finally:
             globals()['API_ENDPOINT'] = old_api_endpoint
             globals()['LOGOUT_ENDPOINT'] = old_logout_endpoint
-            globals()['USER_INFO_ENDPOINT'] = old_user_info_endpoint
 
     return configured_handler
 
