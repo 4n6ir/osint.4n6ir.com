@@ -1,4 +1,5 @@
 import boto3
+import io
 import json
 import os
 import requests
@@ -21,6 +22,8 @@ ITEMS = [
 
 
 def _normalize_domain(value):
+    if isinstance(value, bytes):
+        value = value.decode('utf-8', errors='replace')
     return (value or '').strip().lower().rstrip('.')
 
 
@@ -40,27 +43,22 @@ def _extract_tld(domain):
     return ''
 
 
-def _rewrite_domains_file_with_sld(file_path):
-    formatted_path = f'{file_path}.formatted'
+def _format_domains_csv(lines):
+    output = io.StringIO()
 
-    with open(file_path, 'r', encoding='utf-8', errors='replace') as source, open(
-        formatted_path,
-        'w',
-        encoding='utf-8',
-    ) as destination:
-        for raw_line in source:
-            domain = _normalize_domain(raw_line)
-            if not domain:
-                continue
-            sld = _extract_sld(domain)
-            if not sld:
-                continue
-            tld = _extract_tld(domain)
-            if not tld:
-                continue
-            destination.write(f'{sld},{tld},M\n')
+    for raw_line in lines:
+        domain = _normalize_domain(raw_line)
+        if not domain:
+            continue
+        sld = _extract_sld(domain)
+        if not sld:
+            continue
+        tld = _extract_tld(domain)
+        if not tld:
+            continue
+        output.write(f'{sld},{tld},M\n')
 
-    os.replace(formatted_path, file_path)
+    return output.getvalue().encode('utf-8')
 
 
 def _build_session():
@@ -80,29 +78,18 @@ def _build_session():
     return session
 
 
-def _download_to_file(session, url, headers, file_path, timeout=(10, 120), max_attempts=4):
-    temp_path = f'{file_path}.part'
-
+def _download_and_format_csv(session, url, headers, timeout=(10, 120), max_attempts=4):
     for attempt in range(1, max_attempts + 1):
         try:
             with session.get(url, headers=headers, stream=True, timeout=timeout) as response:
                 response.raise_for_status()
-                with open(temp_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        if chunk:
-                            f.write(chunk)
-
-            os.replace(temp_path, file_path)
-            return
+                lines = response.iter_lines(decode_unicode=True)
+                return _format_domains_csv(lines)
         except (ChunkedEncodingError, RequestsConnectionError, Timeout) as error:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
             if attempt == max_attempts:
                 raise
             print(f'Retrying download after transient network error (attempt {attempt}/{max_attempts}): {error}')
         except Exception:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
             raise
 
 
@@ -132,25 +119,15 @@ def handler(event, context):
         url = 'https://domains-monitor.com/api/v1/'+login['token']+'/get/'+item+'/list/text/'
 
         fname = f'{item}.csv'
-        fpath = f'/tmp/{fname}'
-
-        _download_to_file(session, url, headers, fpath)
-        _rewrite_domains_file_with_sld(fpath)
+        body = _download_and_format_csv(session, url, headers)
         print(f'Download complete: {fname}')
 
-        try:
-            s3.upload_file(
-                fpath,
-                os.environ['S3_BUCKET_NAME'],
-                fname,
-                ExtraArgs = {
-                    'ContentType': "text/csv"
-                }
-            )
-        finally:
-            if os.path.exists(fpath):
-                os.remove(fpath)
-                print(f'Cleaned up: {fname}')
+        s3.put_object(
+            Bucket = os.environ['S3_BUCKET_NAME'],
+            Key = fname,
+            Body = body,
+            ContentType = 'text/csv'
+        )
 
         downloaded.append(fname)
 
