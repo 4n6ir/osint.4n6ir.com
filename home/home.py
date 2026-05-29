@@ -32,11 +32,13 @@ except ImportError:  # pragma: no cover
 
 API_ENDPOINT = os.getenv('API_ENDPOINT', '')
 LOGOUT_ENDPOINT = os.getenv('LOGOUT_ENDPOINT', '')
+USER_INFO_ENDPOINT = os.getenv('USER_INFO_ENDPOINT', '')
 
 HTTP_SESSION = requests.Session() if requests else None
 DYNAMODB = boto3.resource('dynamodb')
 DYNAMODB_CLIENT = boto3.client('dynamodb')
 
+IDENTITY_CACHE = {}
 TABLE_CACHE = {}
 MATCHED_SLD_CACHE = {}
 MATCHED_SLD_CACHE_TTL_SECONDS = 60
@@ -46,6 +48,7 @@ SEARCH_FIELDS_CACHE_TTL_SECONDS = 60
 SEARCH_FIELDS_CACHE_MAX_ENTRIES = 32
 VISIBLE_PROFILE_FIELDS = ('sponsor', 'threshold', 'monitors')
 PROFILE_VISIBLE_FIELDS = {'sponsor', 'threshold', 'monitors'}
+CURRENT_EVENT = {}
 
 # Simple keyboard neighborhood map for replacement/insertion strategies.
 _QWERTY_NEIGHBORS = {
@@ -190,6 +193,7 @@ def _is_force_refresh(event):
 
 
 def _clear_runtime_caches():
+    IDENTITY_CACHE.clear()
     MATCHED_SLD_CACHE.clear()
     SEARCH_FIELDS_CACHE.clear()
 
@@ -250,6 +254,16 @@ def _resolve_identity(event, authorization_header):
     if authorizer_identity.get('email'):
         return authorizer_identity
     return {}
+
+
+def _fetch_user_identity(authorization_header):
+    cache_key = str(authorization_header or '').strip()
+    if cache_key in IDENTITY_CACHE:
+        return IDENTITY_CACHE[cache_key]
+
+    identity = _resolve_identity(CURRENT_EVENT, authorization_header)
+    IDENTITY_CACHE[cache_key] = identity
+    return identity
 
 
 def _normalize_domain(entry):
@@ -3827,12 +3841,74 @@ def _normalize_action(action):
 
 def _handle_request(event, _context):
     event = event or {}
+    globals()['CURRENT_EVENT'] = event
+    IDENTITY_CACHE.clear()
     if _is_force_refresh(event):
         _clear_runtime_caches()
 
     method = _get_method(event)
     authorization_header = _get_authorization(event)
-    identity = _resolve_identity(event, authorization_header)
+
+    if method == 'POST':
+        body = _get_body(event)
+        payload = {}
+        if body:
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                payload = {}
+
+        if not isinstance(payload, dict):
+            payload = {}
+
+        action = _normalize_action(payload.get('action'))
+        if action == 'VerifyDomainsMonitorToken':
+            account, error = _verify_domains_monitor_account(payload.get('apiToken', ''))
+            if error:
+                return _json_response({'ok': False, 'message': error}, status_code=400)
+
+            identity = _fetch_user_identity(authorization_header)
+            cognito_email = identity.get('email', 'unknown')
+            subscription_table = _get_env_table('SUBSCRIPTION_TABLE', 'subscription')
+            try:
+                _put_domains_monitor_subscription(subscription_table, account, cognito_email=cognito_email)
+            except (BotoCoreError, ClientError, KeyError, TypeError, ValueError):
+                return _json_response(
+                    {
+                        'ok': False,
+                        'message': 'Token verified, but saving the subscription record failed.',
+                    },
+                    status_code=500,
+                )
+
+            domains_monitor_email = str(account.get('email', '')).strip().lower()
+            normalized_cognito_email = str(cognito_email or '').strip().lower()
+            email_match = bool(domains_monitor_email and normalized_cognito_email and domains_monitor_email == normalized_cognito_email)
+
+            if not email_match:
+                return _json_response(
+                    {
+                        'ok': False,
+                        'message': 'Token verified and subscription saved, but Domains Monitor email does not match your Cognito login email.',
+                        'email': account.get('email', ''),
+                        'status': account.get('status', ''),
+                        'license': account.get('license', ''),
+                        'ttl': account.get('ttl', 0),
+                    }
+                )
+
+            return _json_response(
+                {
+                    'ok': True,
+                    'message': 'Token verified and subscription saved.',
+                    'email': account.get('email', ''),
+                    'status': account.get('status', ''),
+                    'license': account.get('license', ''),
+                    'ttl': account.get('ttl', 0),
+                }
+            )
+
+    identity = _fetch_user_identity(authorization_header)
     email = str(identity.get('email') or '').strip().lower()
 
     if not email or email == 'unknown':
@@ -3951,53 +4027,7 @@ def _handle_request(event, _context):
             status_code = 200 if success else 400
             return _json_response({'ok': success, 'message': message}, status_code=status_code)
 
-        if action == 'VerifyDomainsMonitorToken':
-            account, error = _verify_domains_monitor_account(payload.get('apiToken', ''))
-            if error:
-                return _json_response({'ok': False, 'message': error}, status_code=400)
-
-            identity = _resolve_identity(event, authorization_header)
-            cognito_email = identity.get('email', 'unknown')
-            subscription_table = _get_env_table('SUBSCRIPTION_TABLE', 'subscription')
-            try:
-                _put_domains_monitor_subscription(subscription_table, account, cognito_email=cognito_email)
-            except (BotoCoreError, ClientError, KeyError, TypeError, ValueError):
-                return _json_response(
-                    {
-                        'ok': False,
-                        'message': 'Token verified, but saving the subscription record failed.',
-                    },
-                    status_code=500,
-                )
-
-            domains_monitor_email = str(account.get('email', '')).strip().lower()
-            normalized_cognito_email = str(cognito_email or '').strip().lower()
-            email_match = bool(domains_monitor_email and normalized_cognito_email and domains_monitor_email == normalized_cognito_email)
-
-            if not email_match:
-                return _json_response(
-                    {
-                        'ok': False,
-                        'message': 'Token verified and subscription saved, but Domains Monitor email does not match your Cognito login email.',
-                        'email': account.get('email', ''),
-                        'status': account.get('status', ''),
-                        'license': account.get('license', ''),
-                        'ttl': account.get('ttl', 0),
-                    }
-                )
-
-            return _json_response(
-                {
-                    'ok': True,
-                    'message': 'Token verified and subscription saved.',
-                    'email': account.get('email', ''),
-                    'status': account.get('status', ''),
-                    'license': account.get('license', ''),
-                    'ttl': account.get('ttl', 0),
-                }
-            )
-
-        identity = _resolve_identity(event, authorization_header)
+        identity = _fetch_user_identity(authorization_header)
         email = identity.get('email', 'unknown')
         domain, success, message = _process_submission(entry, email, action)
 
@@ -4017,19 +4047,21 @@ def _handle_request(event, _context):
 
 
 def create_handler(api_endpoint, logout_endpoint, user_info_endpoint=None):
-    del user_info_endpoint
     def configured_handler(event, context):
         old_api_endpoint = API_ENDPOINT
         old_logout_endpoint = LOGOUT_ENDPOINT
+        old_user_info_endpoint = USER_INFO_ENDPOINT
 
         globals()['API_ENDPOINT'] = api_endpoint
         globals()['LOGOUT_ENDPOINT'] = logout_endpoint
+        globals()['USER_INFO_ENDPOINT'] = user_info_endpoint or ''
 
         try:
             return _handle_request(event, context)
         finally:
             globals()['API_ENDPOINT'] = old_api_endpoint
             globals()['LOGOUT_ENDPOINT'] = old_logout_endpoint
+            globals()['USER_INFO_ENDPOINT'] = old_user_info_endpoint
 
     return configured_handler
 

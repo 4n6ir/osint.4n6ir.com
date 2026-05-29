@@ -13,7 +13,11 @@ os.environ.setdefault('AWS_REGION', 'us-east-1')
 
 from home import home
 
-playwright = pytest.importorskip('playwright.sync_api', reason='Playwright is not installed')
+try:
+    import playwright.sync_api as playwright
+except ImportError:
+    playwright = None
+    pytestmark = pytest.mark.skip(reason='Playwright is not installed')
 
 
 def _empty_sections_payload():
